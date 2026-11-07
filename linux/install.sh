@@ -1,28 +1,25 @@
 #!/bin/bash
 set -e
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="/opt/monitoring-agent"
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
-REPO_RAW_URL="https://raw.githubusercontent.com/45prad/monitoring-server/main/linux"
+
+echo "[*] Checking Python 3..."
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[*] Python 3 not found. Installing..."
+    (apt-get update && apt-get install -y python3) || yum install -y python3 || true
+fi
 
 echo "[*] Installing Linux Monitoring Agent..."
 
 mkdir -p "$TARGET_DIR"
-
-# 1. Copy server.py from local directory or download from GitHub if piped via curl
-if [ -n "$DIR" ] && [ -f "$DIR/server.py" ]; then
-    cp "$DIR/server.py" "$TARGET_DIR/server.py"
-else
-    echo "[*] Fetching server.py from GitHub..."
-    curl -sL "$REPO_RAW_URL/server.py" -o "$TARGET_DIR/server.py"
-fi
+cp "$DIR/server.py" "$TARGET_DIR/server.py"
 chmod +x "$TARGET_DIR/server.py"
 
-# 2. Determine python3 binary
-PYTHON_BIN="$(command -v python3 || echo "/usr/bin/python3")"
-
-# 3. Create systemd service unit
-cat <<EOF > /etc/systemd/system/monitoring-agent.service
+if [ -f "$DIR/monitoring-agent.service" ]; then
+    cp "$DIR/monitoring-agent.service" /etc/systemd/system/monitoring-agent.service
+else
+    cat <<EOF > /etc/systemd/system/monitoring-agent.service
 [Unit]
 Description=Monitoring Agent API Server
 After=network.target
@@ -30,7 +27,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$PYTHON_BIN $TARGET_DIR/server.py
+ExecStart=/usr/bin/python3 $TARGET_DIR/server.py
 WorkingDirectory=$TARGET_DIR
 Restart=always
 RestartSec=5
@@ -39,10 +36,11 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
+fi
 
-# 4. Enable and start service
 systemctl daemon-reload
 systemctl enable monitoring-agent.service
 systemctl restart monitoring-agent.service
 
-echo "[+] Linux Monitoring Agent installed and running on port ${MONITORING_PORT:-9323}!"
+echo "[+] Linux Monitoring Agent installed and started on port ${MONITORING_PORT:-9323}!"
+
