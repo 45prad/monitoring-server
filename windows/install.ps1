@@ -10,10 +10,14 @@ if (!(Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-$CurrentDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-Copy-Item -Path "$CurrentDir\server.ps1" -Destination "$InstallDir\server.ps1" -Force
+$CurrentDir = if ($MyInvocation.MyCommand.Definition) { Split-Path -Parent $MyInvocation.MyCommand.Definition } else { "" }
+if ($CurrentDir -and (Test-Path "$CurrentDir\server.ps1")) {
+    Copy-Item -Path "$CurrentDir\server.ps1" -Destination "$InstallDir\server.ps1" -Force
+} else {
+    Invoke-WebRequest -Uri "https://raw.githubusercontent.com/45prad/monitoring-server/main/windows/server.ps1" -OutFile "$InstallDir\server.ps1" -UseBasicParsing -ErrorAction SilentlyContinue
+}
 
-# 1. Allow URL ACL for non-admin if needed
+# 1. Allow URL ACL
 netsh http add urlacl url="http://+:$Port/" sddl="D:(A;;GX;;;WD)" 2>$null
 
 # 2. Add Firewall Rule
@@ -34,4 +38,3 @@ Register-ScheduledTask -TaskName "MonitoringAgent" -Action $Action -Trigger @($T
 Start-ScheduledTask -TaskName "MonitoringAgent" -ErrorAction SilentlyContinue
 
 Write-Host "[+] Windows Monitoring Agent installed and running on port $Port"
-
