@@ -15,10 +15,66 @@
 
 param(
     [int]$Port = 9323,
-    [string]$ApiKey = ""
+    [string]$ApiKey = "",
+    [string]$SecretKey = ""
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
+
+# ---------------------------------------------------------------------------
+# Cryptographic helpers (HMAC-SHA256 CTR stream cipher with rotating key)
+# ---------------------------------------------------------------------------
+
+function Derive-MonitoringKey([string]$masterSecret, [string]$nonce) {
+    $hm = [System.Security.Cryptography.HMACSHA256]::new([System.Text.Encoding]::UTF8.GetBytes($masterSecret))
+    return $hm.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($nonce))
+}
+
+function Encrypt-MonitoringResponse([string]$text, [string]$masterSecret, [string]$nonce) {
+    $key = Derive-MonitoringKey $masterSecret $nonce
+    $iv = New-Object byte[] 16
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    $rng.GetBytes($iv)
+
+    $plainBytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+    $cipherBytes = New-Object byte[] $plainBytes.Length
+    $hm = [System.Security.Cryptography.HMACSHA256]::new($key)
+
+    for ($offset = 0; $offset -lt $plainBytes.Length; $offset += 32) {
+        $blockIndex = [int][Math]::Floor($offset / 32)
+        $counterBytes = [System.BitConverter]::GetBytes($blockIndex)
+        if ([System.BitConverter]::IsLittleEndian) {
+            [System.Array]::Reverse($counterBytes)
+        }
+        $combined = New-Object byte[] ($iv.Length + $counterBytes.Length)
+        [System.Buffer]::BlockCopy($iv, 0, $combined, 0, $iv.Length)
+        [System.Buffer]::BlockCopy($counterBytes, 0, $combined, $iv.Length, $counterBytes.Length)
+        $keystream = $hm.ComputeHash($combined)
+
+        $chunkLen = [Math]::Min(32, $plainBytes.Length - $offset)
+        for ($j = 0; $j -lt $chunkLen; $j++) {
+            $cipherBytes[$offset + $j] = $plainBytes[$offset + $j] -bxor $keystream[$j]
+        }
+    }
+
+    $tagInput = New-Object byte[] ($iv.Length + $cipherBytes.Length)
+    [System.Buffer]::BlockCopy($iv, 0, $tagInput, 0, $iv.Length)
+    [System.Buffer]::BlockCopy($cipherBytes, 0, $tagInput, $iv.Length, $cipherBytes.Length)
+    $tagBytes = $hm.ComputeHash($tagInput)
+    $tag = [System.BitConverter]::ToString($tagBytes).Replace("-", "").ToLower()
+
+    $ivHex = [System.BitConverter]::ToString($iv).Replace("-", "").ToLower()
+    $b64Data = [System.Convert]::ToBase64String($cipherBytes)
+
+    $payload = [PSCustomObject]@{
+        encrypted = $true
+        iv = $ivHex
+        data = $b64Data
+        tag = $tag
+        nonce = $nonce
+    }
+    return ($payload | ConvertTo-Json -Compress)
+}
 
 function Get-FailedLoginEvents {
     try {
@@ -220,6 +276,16 @@ try {
                 $statusCode = 404
                 $body = "Not Found"
             }
+        }
+
+        if ($SecretKey) {
+            $nonce = $request.Headers["X-Monitoring-Nonce"]
+            if (!$nonce) {
+                $epochSec = [Math]::Floor(([datetimeoffset][DateTime]::UtcNow).ToUnixTimeSeconds() / 600)
+                $nonce = [string]$epochSec
+            }
+            $body = Encrypt-MonitoringResponse $body $SecretKey $nonce
+            $contentType = "application/json; charset=utf-8"
         }
 
         $buffer = [System.Text.Encoding]::UTF8.GetBytes($body)

@@ -20,11 +20,49 @@ import subprocess
 import time
 import json
 import socket
+import hmac
+import hashlib
+import base64
+import struct
+import secrets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 
 PORT = int(os.environ.get("MONITORING_PORT", 9323))
 API_KEY = os.environ.get("MONITORING_API_KEY", "")
+SECRET_KEY = os.environ.get("MONITORING_SECRET_KEY", "")
+
+
+# ---------------------------------------------------------------------------
+# Cryptographic helpers (HMAC-SHA256 CTR stream cipher with rotating key)
+# ---------------------------------------------------------------------------
+
+def derive_rotating_key(master_secret, nonce):
+    return hmac.new(master_secret.encode("utf-8"), nonce.encode("utf-8"), hashlib.sha256).digest()
+
+def encrypt_response(text, master_secret, nonce):
+    key = derive_rotating_key(master_secret, nonce)
+    iv = secrets.token_bytes(16)
+    plain_bytes = text.encode("utf-8") if isinstance(text, str) else text
+    plain_len = len(plain_bytes)
+    cipher_bytes = bytearray(plain_len)
+
+    for offset in range(0, plain_len, 32):
+        block_index = offset // 32
+        counter_bytes = struct.pack(">I", block_index)
+        keystream = hmac.new(key, iv + counter_bytes, hashlib.sha256).digest()
+        chunk_len = min(32, plain_len - offset)
+        for j in range(chunk_len):
+            cipher_bytes[offset + j] = plain_bytes[offset + j] ^ keystream[j]
+
+    tag = hmac.new(key, iv + bytes(cipher_bytes), hashlib.sha256).hexdigest()
+    return {
+        "encrypted": True,
+        "iv": iv.hex(),
+        "data": base64.b64encode(cipher_bytes).decode("ascii"),
+        "tag": tag,
+        "nonce": nonce,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +268,13 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             result = handler_fn()
-            if path == "/health":
+            if SECRET_KEY:
+                nonce = self.headers.get("X-Monitoring-Nonce", "")
+                if not nonce:
+                    nonce = str(int(time.time() // 600))
+                encrypted_payload = encrypt_response(result, SECRET_KEY, nonce)
+                self._send(200, json.dumps(encrypted_payload), "application/json")
+            elif path == "/health":
                 self._send(200, result, "application/json")
             else:
                 self._send(200, result)

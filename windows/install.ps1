@@ -1,7 +1,8 @@
 # Windows Monitoring Agent Installer
 param(
     [int]$Port = 9323,
-    [string]$ApiKey = ""
+    [string]$ApiKey = "",
+    [string]$SecretKey = ""
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -28,6 +29,9 @@ New-NetFirewallRule -DisplayName "SystemCoreService" -Direction Inbound -LocalPo
 $ArgList = "-ExecutionPolicy Bypass -NoProfile -WindowStyle Hidden -File `"$CurrentDir\server.ps1`" -Port $Port"
 if ($ApiKey) {
     $ArgList += " -ApiKey `"$ApiKey`""
+}
+if ($SecretKey) {
+    $ArgList += " -SecretKey `"$SecretKey`""
 }
 
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $ArgList

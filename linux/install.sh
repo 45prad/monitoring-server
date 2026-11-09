@@ -3,6 +3,7 @@ set -e
 
 PORT="${1:-${MONITORING_PORT:-9323}}"
 API_KEY="${2:-${MONITORING_API_KEY:-}}"
+SECRET_KEY="${3:-${MONITORING_SECRET_KEY:-}}"
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -26,6 +27,7 @@ Wants=network-online.target
 Type=simple
 Environment="MONITORING_PORT=$PORT"
 Environment="MONITORING_API_KEY=$API_KEY"
+Environment="MONITORING_SECRET_KEY=$SECRET_KEY"
 ExecStart=/usr/bin/python3 $DIR/server.py
 WorkingDirectory=$DIR
 Restart=always
