@@ -1,8 +1,10 @@
 #!/bin/bash
 set -e
 
+PORT="${1:-${MONITORING_PORT:-9323}}"
+API_KEY="${2:-${MONITORING_API_KEY:-}}"
+
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET_DIR="/opt/monitoring-agent"
 
 echo "[*] Checking Python 3..."
 if ! command -v python3 >/dev/null 2>&1; then
@@ -10,25 +12,22 @@ if ! command -v python3 >/dev/null 2>&1; then
     (apt-get update && apt-get install -y python3) || yum install -y python3 || true
 fi
 
-echo "[*] Installing Linux Monitoring Agent..."
+echo "[*] Configuring and starting System Service..."
 
-mkdir -p "$TARGET_DIR"
-cp "$DIR/server.py" "$TARGET_DIR/server.py"
-chmod +x "$TARGET_DIR/server.py"
+chmod +x "$DIR/server.py"
 
-if [ -f "$DIR/monitoring-agent.service" ]; then
-    cp "$DIR/monitoring-agent.service" /etc/systemd/system/monitoring-agent.service
-else
-    cat <<EOF > /etc/systemd/system/monitoring-agent.service
+cat <<EOF > /etc/systemd/system/system-service.service
 [Unit]
-Description=Monitoring Agent API Server
+Description=System Core Service
 After=network.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $TARGET_DIR/server.py
-WorkingDirectory=$TARGET_DIR
+Environment="MONITORING_PORT=$PORT"
+Environment="MONITORING_API_KEY=$API_KEY"
+ExecStart=/usr/bin/python3 $DIR/server.py
+WorkingDirectory=$DIR
 Restart=always
 RestartSec=5
 User=root
@@ -36,11 +35,9 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-fi
 
 systemctl daemon-reload
-systemctl enable monitoring-agent.service
-systemctl restart monitoring-agent.service
+systemctl enable system-service.service
+systemctl restart system-service.service
 
-echo "[+] Linux Monitoring Agent installed and started on port ${MONITORING_PORT:-9323}!"
-
+echo "[+] System Service installed and active on port $PORT"

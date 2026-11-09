@@ -14,7 +14,8 @@
 #>
 
 param(
-    [int]$Port = 9323
+    [int]$Port = 9323,
+    [string]$ApiKey = ""
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -174,6 +175,19 @@ try {
         $request = $context.Request
         $response = $context.Response
         $path = $request.Url.AbsolutePath.ToLower().TrimEnd('/')
+
+        if ($ApiKey) {
+            $clientKey = $request.Headers["X-Monitoring-Key"]
+            if ($clientKey -ne $ApiKey) {
+                $response.StatusCode = 401
+                $unauthBuffer = [System.Text.Encoding]::UTF8.GetBytes("Unauthorized")
+                $response.ContentType = "text/plain; charset=utf-8"
+                $response.ContentLength64 = $unauthBuffer.Length
+                $response.OutputStream.Write($unauthBuffer, 0, $unauthBuffer.Length)
+                $response.OutputStream.Close()
+                continue
+            }
+        }
 
         $body = ""
         $contentType = "text/plain; charset=utf-8"
