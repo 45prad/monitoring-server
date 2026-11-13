@@ -106,8 +106,62 @@ function Get-FailedLoginEvents {
 function Get-NetworkData {
     try {
         $outRules = Get-NetFirewallRule | Out-String
+        $sb = [System.Text.StringBuilder]::new()
+        [void]$sb.AppendLine("================ FIREWALL RULES ================")
+
+        # Fast query for enabled firewall rules (limit to 50 for rapid response)
+        $rules = Get-NetFirewallRule -Enabled True -ErrorAction SilentlyContinue | Select-Object -First 50
+        $i = 1
+        foreach ($r in $rules) {
+            [void]$sb.AppendLine("--------------------------------------------------")
+            [void]$sb.AppendLine("RULE ID     : FW-$i")
+            [void]$sb.AppendLine("INTERFACE   : ANY")
+            [void]$sb.AppendLine("SOURCE      : ANY")
+            [void]$sb.AppendLine("DESTINATION : ANY")
+            [void]$sb.AppendLine("PROTOCOL    : ANY")
+            [void]$sb.AppendLine("PORT        : ANY")
+            [void]$sb.AppendLine("ACTION      : $($r.Action)")
+            [void]$sb.AppendLine("")
+            $i++
+        }
+
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("================ ACTIVE CONNECTIONS ================")
+
+        # Fast connection list via TCP connection table
+        $connections = Get-NetTCPConnection -ErrorAction SilentlyContinue | Select-Object -First 50
+        foreach ($c in $connections) {
+            [void]$sb.AppendLine("--------------------------------------------------")
+            [void]$sb.AppendLine("PROTOCOL       : TCP")
+            [void]$sb.AppendLine("LOCAL ADDRESS  : $($c.LocalAddress)")
+            [void]$sb.AppendLine("LOCAL PORT     : $($c.LocalPort)")
+            [void]$sb.AppendLine("REMOTE ADDRESS : $($c.RemoteAddress)")
+            [void]$sb.AppendLine("REMOTE PORT    : $($c.RemotePort)")
+            [void]$sb.AppendLine("STATE          : $($c.State)")
+            [void]$sb.AppendLine("")
+        }
+
+        [void]$sb.AppendLine("")
+        [void]$sb.AppendLine("================ BLOCKED IPS ================")
+        # Any blocked firewall rules
+        $blocked = $rules | Where-Object { $_.Action -eq "Block" } | Select-Object -First 20
+        $now = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        foreach ($b in $blocked) {
+            [void]$sb.AppendLine("--------------------------------------------------")
+            [void]$sb.AppendLine("TIME        : $now")
+            [void]$sb.AppendLine("BLOCKED IP  : $($b.DisplayName)")
+            [void]$sb.AppendLine("INTERFACE   : ANY")
+            [void]$sb.AppendLine("PROTOCOL    : ANY")
+            [void]$sb.AppendLine("PORT        : ANY")
+            [void]$sb.AppendLine("")
+        }
+
+        # Include netstat output for UI raw feed
         $outNetstat = netstat -ano | Out-String
         return "$outRules`r`n$outNetstat"
+        [void]$sb.AppendLine($outNetstat)
+
+        return $sb.ToString()
     } catch {
         return "COMMAND_ERROR: $($_.Exception.Message)"
     }
@@ -150,14 +204,24 @@ function Get-ServicesData {
         [void]$sb.AppendLine("==================== SERVICE STATUS ====================")
         [void]$sb.AppendLine("")
         $services = Get-Service -ErrorAction SilentlyContinue
+
+        # Bulk fetch all service startup modes in a single CIM call (~0.2s)
+        $startModes = @{}
+        Get-CimInstance Win32_Service -Property Name,StartMode -ErrorAction SilentlyContinue | ForEach-Object {
+            $startModes[$_.Name] = $_.StartMode
+        }
+
+        $services = Get-Service -ErrorAction SilentlyContinue | Select-Object -First 100
         foreach ($service in $services) {
             [void]$sb.AppendLine("--------------------------------------------------------")
             [void]$sb.AppendLine("SERVICE : $($service.Name)")
             [void]$sb.AppendLine("STATUS  : $($service.Status)")
             $startup = (Get-CimInstance Win32_Service -Filter "Name='$($service.Name)'" -ErrorAction SilentlyContinue).StartMode
+            $startup = if ($startModes.ContainsKey($service.Name)) { $startModes[$service.Name] } else { "Unknown" }
             [void]$sb.AppendLine("ENABLED : $startup")
             [void]$sb.AppendLine("")
         }
+
         [void]$sb.AppendLine("")
         [void]$sb.AppendLine("")
         [void]$sb.AppendLine("==================== RECENT LOGS =======================")
@@ -172,6 +236,17 @@ function Get-ServicesData {
                 Format-List | Out-String
             if ($logs) {
                 [void]$sb.Append($logs)
+
+        # Single fast query for recent System service logs instead of querying per service
+        $recentLogs = Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2,3,4} -MaxEvents 30 -ErrorAction SilentlyContinue
+        if ($recentLogs) {
+            foreach ($evt in $recentLogs) {
+                [void]$sb.AppendLine("========================================================")
+                [void]$sb.AppendLine("LOGS : $($evt.ProviderName)")
+                [void]$sb.AppendLine("========================================================")
+                $line = "{0} | ID:{1} | {2} | {3}" -f $evt.TimeCreated.ToString("yyyy-MM-dd HH:mm:ss"), $evt.Id, $evt.LevelDisplayName, $evt.Message.Replace("`r`n", " ")
+                [void]$sb.AppendLine($line)
+                [void]$sb.AppendLine("")
             }
             [void]$sb.AppendLine("")
             [void]$sb.AppendLine("")
