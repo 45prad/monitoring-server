@@ -105,7 +105,6 @@ function Get-FailedLoginEvents {
 
 function Get-NetworkData {
     try {
-        $outRules = Get-NetFirewallRule | Out-String
         $sb = [System.Text.StringBuilder]::new()
         [void]$sb.AppendLine("================ FIREWALL RULES ================")
 
@@ -158,7 +157,6 @@ function Get-NetworkData {
 
         # Include netstat output for UI raw feed
         $outNetstat = netstat -ano | Out-String
-        return "$outRules`r`n$outNetstat"
         [void]$sb.AppendLine($outNetstat)
 
         return $sb.ToString()
@@ -203,7 +201,6 @@ function Get-ServicesData {
         $sb = [System.Text.StringBuilder]::new()
         [void]$sb.AppendLine("==================== SERVICE STATUS ====================")
         [void]$sb.AppendLine("")
-        $services = Get-Service -ErrorAction SilentlyContinue
 
         # Bulk fetch all service startup modes in a single CIM call (~0.2s)
         $startModes = @{}
@@ -216,26 +213,14 @@ function Get-ServicesData {
             [void]$sb.AppendLine("--------------------------------------------------------")
             [void]$sb.AppendLine("SERVICE : $($service.Name)")
             [void]$sb.AppendLine("STATUS  : $($service.Status)")
-            $startup = (Get-CimInstance Win32_Service -Filter "Name='$($service.Name)'" -ErrorAction SilentlyContinue).StartMode
             $startup = if ($startModes.ContainsKey($service.Name)) { $startModes[$service.Name] } else { "Unknown" }
             [void]$sb.AppendLine("ENABLED : $startup")
             [void]$sb.AppendLine("")
         }
 
         [void]$sb.AppendLine("")
-        [void]$sb.AppendLine("")
         [void]$sb.AppendLine("==================== RECENT LOGS =======================")
         [void]$sb.AppendLine("")
-        foreach ($service in $services) {
-            [void]$sb.AppendLine("========================================================")
-            [void]$sb.AppendLine("LOGS : $($service.Name)")
-            [void]$sb.AppendLine("========================================================")
-            $logs = Get-WinEvent -LogName System -MaxEvents 20 -ErrorAction SilentlyContinue |
-                Where-Object { $_.Message -like "*$($service.Name)*" } |
-                Select-Object TimeCreated, Id, LevelDisplayName, Message |
-                Format-List | Out-String
-            if ($logs) {
-                [void]$sb.Append($logs)
 
         # Single fast query for recent System service logs instead of querying per service
         $recentLogs = Get-WinEvent -FilterHashtable @{LogName='System'; Level=1,2,3,4} -MaxEvents 30 -ErrorAction SilentlyContinue
@@ -248,8 +233,6 @@ function Get-ServicesData {
                 [void]$sb.AppendLine($line)
                 [void]$sb.AppendLine("")
             }
-            [void]$sb.AppendLine("")
-            [void]$sb.AppendLine("")
         }
         return $sb.ToString()
     } catch {
